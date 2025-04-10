@@ -2,44 +2,56 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
-[RequireComponent(typeof(Rigidbody2D), typeof(TouchingDirection))]
 
+[RequireComponent(typeof(Rigidbody2D), typeof(TouchingDirection))]
 public class PlayerController : MonoBehaviour
 {
     public float walkSpeed = 5f;
     public float runSpeed = 8f;
     public float airWalkSpeed = 3f;
+    private float moveHoldTime = 0f;
+    private float maxSpeed = 10f;
+    private float speedRate = 5f;
+    [SerializeField] private float maxJumpForce = 12.5f;
+    [SerializeField] private float slopeFactor = 0.5f;
+    public bool isOnLadder = false;
+    public float climbSpeed = 4f;
+    private float originalGravityScale;
+
+    // Tambahan untuk launching dari tangga
+    private bool isLaunchingFromLadder = false;
+    private float launchDuration = 0.2f;
+    private float launchTimer = 0f;
+
+    public bool isHanging = false;
+    public Transform hangingCheck;
+    public LayerMask hangingLayer;
+    public float hangingCheckRadius = 0.2f;
+    public float hangingMoveSpeed = 3f;
+
 
     public float CurrentMoveSpeed
     {
         get
         {
-            if (IsMoving && !touchingDirection.IsOnWall)
+            if (IsMoving && touchingDirection.IsGrounded)
             {
-                if (touchingDirection.IsGrounded)
-                {
-                    if (IsRunning)
-                    {
-                        return runSpeed;
-                    }
-                    else
-                    {
-                        return walkSpeed;
-                    }
-                }
-                else { return airWalkSpeed; }
-
+                float calculatedSpeed = speedRate * moveHoldTime;
+                return Mathf.Min(calculatedSpeed, maxSpeed);
+            }
+            else if (IsMoving && !touchingDirection.IsGrounded)
+            {
+                float calculatedSpeed = speedRate * moveHoldTime;
+                return Mathf.Min(calculatedSpeed, maxSpeed);
             }
             else
             {
-                return 0;
+                return 0f;
             }
         }
     }
 
     public float jumpImpulse = 10f;
-    public float jumpDistanceX = 5f; // Jarak horizontal loncatan
-    public float jumpDistanceY = 10f; // Jarak vertikal loncatan
 
     Vector2 moveInput;
     TouchingDirection touchingDirection;
@@ -50,14 +62,19 @@ public class PlayerController : MonoBehaviour
     [SerializeField]
     private bool _isRunning = false;
 
-    public bool IsRunning { get { return _isRunning; } set { _isRunning = value; animator.SetBool(AnimationStrings.isRunning, value); } }
+    public bool IsRunning
+    {
+        get { return _isRunning; }
+        set
+        {
+            _isRunning = value;
+            animator.SetBool(AnimationStrings.isRunning, value);
+        }
+    }
 
     public bool IsMoving
     {
-        get
-        {
-            return _isMoving;
-        }
+        get { return _isMoving; }
         private set
         {
             _isMoving = value;
@@ -74,7 +91,6 @@ public class PlayerController : MonoBehaviour
         {
             if (_isFacingRight != value)
             {
-                // Flip the local scale to make the player face the opposite direction
                 transform.localScale *= new Vector2(-1, 1);
             }
             _isFacingRight = value;
@@ -84,31 +100,75 @@ public class PlayerController : MonoBehaviour
     Rigidbody2D rb;
     Animator animator;
 
-
     private void Awake()
     {
         rb = GetComponent<Rigidbody2D>();
         animator = GetComponent<Animator>();
         touchingDirection = GetComponent<TouchingDirection>();
-        
+        originalGravityScale = rb.gravityScale;
     }
 
-    // Start is called before the first frame update
-    void Start()
-    {
+    void Start() { }
 
-    }
-
-    // Update is called once per frame
-
-    void Update()
-    {
-
-    }
+    void Update() { }
 
     private void FixedUpdate()
     {
-        rb.velocity = new Vector2(moveInput.x * CurrentMoveSpeed, rb.velocity.y);
+        if (IsMoving && touchingDirection.IsGrounded)
+        {
+            moveHoldTime += Time.fixedDeltaTime;
+        }
+        else if (!touchingDirection.IsGrounded && moveInput.x != 0)
+        {
+            // hold time tetap
+        }
+        else
+        {
+            moveHoldTime = 0f;
+        }
+
+        if (isOnLadder)
+        {
+            rb.gravityScale = 0f;
+            rb.velocity = new Vector2(rb.velocity.x, moveInput.y * climbSpeed);
+            animator.SetBool(AnimationStrings.isClimbing, moveInput.y != 0);
+        }
+        else
+        {
+            rb.gravityScale = originalGravityScale;
+            animator.SetBool(AnimationStrings.isClimbing, false);
+        }
+
+        if (!isLaunchingFromLadder)
+        {
+            rb.velocity = new Vector2(moveInput.x * CurrentMoveSpeed, rb.velocity.y);
+        }
+        else
+        {
+            launchTimer -= Time.fixedDeltaTime;
+            if (launchTimer <= 0f)
+            {
+                isLaunchingFromLadder = false;
+            }
+        }
+        if (!touchingDirection.IsGrounded && !isOnLadder && !isHanging)
+        {
+            Collider2D hangingSpot = Physics2D.OverlapCircle(hangingCheck.position, hangingCheckRadius, hangingLayer);
+
+            if (hangingSpot != null && rb.velocity.y > 0) // Naik dan kena bawah platform
+            {
+                EnterHangingMode();
+            }
+        }
+        if (isHanging)
+        {
+            rb.velocity = new Vector2(moveInput.x * hangingMoveSpeed, 0f);
+
+            if (moveInput != Vector2.zero)
+            {
+                setFacingDirection(moveInput);
+            }
+        }
 
         animator.SetFloat(AnimationStrings.yVelocity, rb.velocity.y);
     }
@@ -116,19 +176,15 @@ public class PlayerController : MonoBehaviour
     public void OnMove(InputAction.CallbackContext context)
     {
         Vector2 input = context.ReadValue<Vector2>();
-
-        // Hanya izinkan gerakan horizontal jika pemain berada di tanah
-        if (touchingDirection.IsGrounded)
-        {
-            moveInput.x = input.x;
-        }
-        else
-        {
-            moveInput.x = 0; // Tidak bisa bergerak ke kiri/kanan di udara
-        }
+        moveInput = input;
 
         IsMoving = moveInput != Vector2.zero;
         setFacingDirection(moveInput);
+
+        if (moveInput.x == 0)
+        {
+            moveHoldTime = 0f;
+        }
     }
 
     public void OnRun(InputAction.CallbackContext context)
@@ -147,24 +203,100 @@ public class PlayerController : MonoBehaviour
     {
         if (moveInput.x > 0 && !isFacingRight)
         {
-            // Face right
             isFacingRight = true;
         }
         else if (moveInput.x < 0 && isFacingRight)
         {
-            // Face left
             isFacingRight = false;
         }
     }
 
     public void OnJump(InputAction.CallbackContext context)
     {
-        if (context.started && touchingDirection.IsGrounded)
+        if (context.started)
         {
-            animator.SetTrigger(AnimationStrings.jump);
-            float jumpVelocityX = isFacingRight ? jumpDistanceX : -jumpDistanceX;
-            Vector2 jumpForce = new Vector2(jumpVelocityX, jumpDistanceY);
-            rb.AddForce(jumpForce, ForceMode2D.Impulse);
+            if (isHanging)
+            {
+                ExitHangingMode();
+                return;
+            }
+
+            if (touchingDirection.IsGrounded)
+            {
+                float horizontalSpeed = Mathf.Abs(rb.velocity.x);
+                float adjustedJumpForce = CalculateJumpForceFromSpeed(horizontalSpeed);
+                float horizontalBoost = CalculateHorizontalBoost(horizontalSpeed);
+                float direction = Mathf.Sign(moveInput.x);
+                rb.velocity = new Vector2(rb.velocity.x + horizontalBoost * direction, adjustedJumpForce);
+                animator.SetTrigger(AnimationStrings.jump);
+            }
         }
     }
+
+
+    private float CalculateJumpForceFromSpeed(float horizontalSpeed)
+    {
+        float minSpeed = 0f;
+        float maxSpeed = 8f;
+        float maxJump = 11f;
+        float minJump = 8f;
+
+        float t = horizontalSpeed / maxSpeed;
+        float jumpForce = Mathf.Lerp(maxJump, minJump, Mathf.Sqrt(t));
+        return jumpForce;
+    }
+
+    private float CalculateHorizontalBoost(float horizontalSpeed)
+    {
+        float maxBoost = 3f;
+        float minBoost = 0.5f;
+        float t = Mathf.Clamp01(horizontalSpeed / 10f);
+        return Mathf.Lerp(maxBoost, minBoost, t);
+    }
+
+    private void OnTriggerEnter2D(Collider2D collision)
+    {
+        if (collision.CompareTag("UjungTangga"))
+        {
+            isOnLadder = false;
+            rb.gravityScale = originalGravityScale;
+            animator.SetBool(AnimationStrings.isClimbing, false);
+
+            float launchForceX = 6f;
+            float launchForceY = 8f;
+            float direction = isFacingRight ? 1f : -1f;
+
+            rb.velocity = new Vector2(launchForceX * direction, launchForceY);
+            animator.SetTrigger(AnimationStrings.jump);
+
+            isLaunchingFromLadder = true;
+            launchTimer = launchDuration;
+        }
+    }
+    void EnterHangingMode()
+    {
+        isHanging = true;
+        rb.velocity = Vector2.zero;
+
+        rb.gravityScale = 0f;
+
+        //  Kunci posisi vertikal biar gak turun-turun
+        rb.constraints = RigidbodyConstraints2D.FreezePositionY | RigidbodyConstraints2D.FreezeRotation;
+
+        animator.SetBool("isHanging", true); // Buat animasi kalau ada
+    }
+
+    void ExitHangingMode()
+    {
+        isHanging = false;
+
+        rb.gravityScale = originalGravityScale;
+
+        //  Buka kunci posisi Y biar bisa jatuh lagi
+        rb.constraints = RigidbodyConstraints2D.FreezeRotation;
+
+        animator.SetBool("isHanging", false);
+    }
+
+
 }

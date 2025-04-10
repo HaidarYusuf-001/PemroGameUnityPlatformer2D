@@ -14,4 +14,5 @@ internal class AnimationStrings
     internal static string isOnWall = "isOnWall";
     internal static string isOnCeiling = "isOnCeiling";
     internal static string isRunning = "isRunning";
+    internal static string isClimbing = "isClimbing";
 }
